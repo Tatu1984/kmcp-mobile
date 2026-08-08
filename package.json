@@ -1,0 +1,19 @@
+{
+  "name": "kmcp-mobile",
+  "private": true,
+  "version": "1.0.0",
+  "description": "KMCP field applications — the Vendor app used by attendants at the kerb, and the Citizen app.",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "vendor": "npm run start --workspace @kmcp/vendor"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
