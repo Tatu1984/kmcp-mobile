@@ -186,6 +186,21 @@ export interface Shift {
   variance?: { amount: Paise; short: boolean; over: boolean; matched: boolean };
 }
 
+/**
+ * What a photograph is for. These are the server's enum values verbatim — a
+ * near-miss like "SESSION_START" is refused, so it is a type rather than a
+ * string a caller has to remember.
+ */
+export type MediaPurpose =
+  | "SESSION_EVIDENCE_START"
+  | "SESSION_EVIDENCE_END"
+  | "INCIDENT_PHOTO"
+  | "KYC_DOCUMENT"
+  | "AGREEMENT"
+  | "RECEIPT"
+  | "REPORT_EXPORT"
+  | "PROFILE";
+
 export interface UploadTicket {
   uploadUrl: string;
   key: string;

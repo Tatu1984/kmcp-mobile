@@ -5,6 +5,7 @@ import type {
   EndedSession,
   LoginResponse,
   Media,
+  MediaPurpose,
   Payment,
   PlateLookup,
   Session,
@@ -58,6 +59,9 @@ export function createApi(client: ApiClient, queue: OfflineQueue) {
     sessions: {
       lookup: (plateNumber: string) =>
         client.get<PlateLookup>(`/sessions/plate/${encodeURIComponent(plateNumber)}`),
+
+      /** One session by its human-quotable code, or its id. */
+      get: (idOrCode: string) => client.get<Session>(`/sessions/${encodeURIComponent(idOrCode)}`),
 
       mine: (attendantId: string) =>
         client.get<Session[]>("/sessions", {
@@ -145,15 +149,21 @@ export function createApi(client: ApiClient, queue: OfflineQueue) {
        * on a bad connection — a 4 MB photograph fighting a function timeout is
        * how evidence gets lost.
        */
-      upload: async (uri: string, mimeType: string, sizeBytes: number, purpose: string) => {
+      upload: async (uri: string, purpose: MediaPurpose, mimeType = "image/jpeg") => {
+        // Read the file before asking for a ticket, so the size sent is the
+        // size that will actually be uploaded. The server rejects a zero, and a
+        // caller guessing at the length of a photograph it has not opened is
+        // exactly how that zero gets sent.
+        const file = await fetch(uri);
+        const blob = await file.blob();
+        const sizeBytes = blob.size;
+        if (!sizeBytes) throw new Error("The photograph is empty.");
+
         const ticket = await client.post<UploadTicket>("/media/uploads", {
           purpose,
           mimeType,
           sizeBytes,
         });
-
-        const file = await fetch(uri);
-        const blob = await file.blob();
 
         const put = await fetch(ticket.uploadUrl, {
           method: ticket.method,
