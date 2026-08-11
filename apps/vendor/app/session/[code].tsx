@@ -7,14 +7,16 @@ import {
   formatMoney,
   formatPlate,
   formatTime,
+  provisionalFare,
   type EndedSession,
+  type ProvisionalQuote,
   type Payment,
   type Session,
 } from "@kmcp/api";
 
 import { Banner, Button, Card, Loading, Pill, Plate, Row, Stat } from "../../components/ui";
 import { PlateCamera, type Capture } from "../../components/plate-camera";
-import { api } from "../../lib/api";
+import { api, cache } from "../../lib/api";
 import { useLocation } from "../../lib/location";
 import { useSession } from "../../lib/session";
 import { theme } from "../../lib/theme";
@@ -41,6 +43,8 @@ export default function SessionScreen() {
   const [busy, setBusy] = React.useState(false);
   const [cameraOpen, setCameraOpen] = React.useState(false);
   const [capture, setCapture] = React.useState<Capture | null>(null);
+  /** What to charge when the server could not price it. Never overrides a real quote. */
+  const [estimate, setEstimate] = React.useState<ProvisionalQuote | null>(null);
 
   React.useEffect(() => {
     if (!code) return;
@@ -66,7 +70,9 @@ export default function SessionScreen() {
 
   const quote = session && "quote" in session ? session.quote : null;
   const running = session?.status === "ACTIVE" || session?.status === "OVERSTAY";
-  const owed = session?.payableAmount ?? null;
+  // The server's figure whenever there is one; the provisional estimate only
+  // when there is not.
+  const owed = session?.payableAmount ?? estimate?.payableAmount ?? null;
 
   async function end() {
     if (!session) return;
@@ -93,10 +99,26 @@ export default function SessionScreen() {
       if (ended) {
         setSession(ended);
       } else {
-        // Queued. The fare is not known until the server prices it, so nothing
-        // is shown as owed — inventing a figure here is how disputes start.
-        setSession({ ...session, status: "COMPLETED", endAt: new Date().toISOString() });
-        setError("Saved on this handset. The fare will be worked out when you have signal.");
+        // Queued. The server has not priced it, so quote from the cached rate
+        // card instead — an attendant with a driver in front of them needs a
+        // number, and the server's re-price on sync is still what stands.
+        const endedAt = new Date();
+        setSession({ ...session, status: "COMPLETED", endAt: endedAt.toISOString() });
+
+        const quoted = await provisionalFare(cache, {
+          zoneId: session.zoneId,
+          vehicleType: session.vehicleType?.code ?? "CAR",
+          startAt: new Date(session.startAt),
+          endAt: endedAt,
+        });
+
+        if (quoted) {
+          setEstimate(quoted);
+        } else {
+          setError(
+            "Saved on this handset, but there is no rate card cached for this zone, so the fare cannot be worked out here.",
+          );
+        }
       }
       await refreshShift();
     } catch (cause) {
@@ -190,6 +212,32 @@ export default function SessionScreen() {
         </Card>
       ) : null}
 
+      {/* ------------------------- the provisional fare, when there is no signal */}
+      {!quote && estimate ? (
+        <Card>
+          <Banner
+            tone="warning"
+            title="Provisional — worked out on this handset"
+            body={`Rate card cached ${formatTime(estimate.tariffFetchedAt)}. The server prices this properly when it syncs, and any difference shows on your shift.`}
+          />
+          {estimate.lines.map((line, i) => (
+            <Row key={`${line.code}-${i}`} label={line.label} value={formatMoney(line.amount)} />
+          ))}
+          {estimate.taxAmount > 0 ? (
+            <Row label={`Tax (${estimate.taxPercent}%)`} value={formatMoney(estimate.taxAmount)} />
+          ) : null}
+          <View style={styles.total}>
+            <Text style={styles.totalLabel}>To collect</Text>
+            <Text style={styles.totalValue}>{formatMoney(estimate.payableAmount)}</Text>
+          </View>
+          {estimate.assumptions.map((line) => (
+            <Text key={line} style={styles.assumption}>
+              • {line}
+            </Text>
+          ))}
+        </Card>
+      ) : null}
+
       {/* ------------------------------------------------------------ receipt */}
       {payment ? (
         <Card>
@@ -219,7 +267,7 @@ export default function SessionScreen() {
         <View style={styles.actions}>
           {owed && owed > 0 ? (
             <Button
-              label={`Collect ${formatMoney(owed)} cash`}
+              label={`Collect ${formatMoney(owed)} cash${estimate && !quote ? " (provisional)" : ""}`}
               variant="success"
               onPress={() => void collect()}
               busy={busy}
@@ -270,5 +318,6 @@ const styles = StyleSheet.create({
   totalLabel: { ...theme.text.title, color: theme.colour.text },
   totalValue: { ...theme.text.display, color: theme.colour.text },
   tariff: { ...theme.text.small, color: theme.colour.textMuted },
+  assumption: { ...theme.text.small, color: theme.colour.warning },
   actions: { gap: theme.space(1) },
 });

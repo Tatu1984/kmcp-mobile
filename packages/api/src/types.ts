@@ -187,6 +187,75 @@ export interface Shift {
 }
 
 /**
+ * A tariff held on the handset so a fare can be quoted without signal.
+ *
+ * Published tariff versions are immutable — the server forks a new draft rather
+ * than editing one in place — so a cached copy is either current or plainly
+ * stale, never subtly wrong. `fetchedAt` is what tells the attendant which.
+ */
+export interface CachedTariffRule {
+  type: string;
+  label: string;
+  dayType: "ALL" | "WEEKDAY" | "WEEKEND" | "HOLIDAY";
+  timeFrom?: string | null;
+  timeTo?: string | null;
+  multiplier?: number | string | null;
+  flatAmount?: Paise | null;
+  priority: number;
+  isActive: boolean;
+}
+
+export interface CachedTariff {
+  id: string;
+  name: string;
+  zoneId?: string | null;
+  vehicleType: SlotType;
+  baseAmount: Paise;
+  baseMinutes: number;
+  incrementAmount: Paise;
+  incrementMinutes: number;
+  dailyCapAmount?: Paise | null;
+  gracePeriodMin: number;
+  overstayPenalty?: Paise | null;
+  taxPercent: number | string;
+  rules: CachedTariffRule[];
+  /** When this copy was taken. Shown whenever a provisional fare is quoted. */
+  fetchedAt: string;
+}
+
+export interface CachedHoliday {
+  date: string;
+  name: string;
+  zoneIds: string[];
+}
+
+/** A zone with enough of itself to run the geo-fence on the handset. */
+export interface CachedZone {
+  id: string;
+  code: string;
+  name: string;
+  centerLat: number;
+  centerLng: number;
+  boundary?: { type: "Polygon"; coordinates: [number, number][][] } | null;
+  capacity: number;
+  allowedVehicleTypeIds: SlotType[];
+  openTime: string;
+  closeTime: string;
+  status: string;
+  /**
+   * Live occupancy, present only when this came from the server.
+   *
+   * Deliberately absent from a cached copy: how full a kerb is changes minute
+   * by minute, and a stale figure shown as current would send an attendant to
+   * a full zone. Offline, the honest answer is that we do not know.
+   */
+  occupied?: number;
+  available?: number;
+  occupancyPct?: number;
+  availability?: "AVAILABLE" | "LIMITED" | "FULL";
+}
+
+/**
  * What a photograph is for. These are the server's enum values verbatim — a
  * near-miss like "SESSION_START" is refused, so it is a type rather than a
  * string a caller has to remember.

@@ -1,7 +1,14 @@
 import * as SecureStore from "expo-secure-store";
 import * as Application from "expo-application";
 import { Platform } from "react-native";
-import { ApiClient, OfflineQueue, createApi, type Api, type TokenPair } from "@kmcp/api";
+import {
+  ApiClient,
+  OfflineCache,
+  OfflineQueue,
+  createApi,
+  type Api,
+  type TokenPair,
+} from "@kmcp/api";
 
 /**
  * One client, one queue, for the whole app.
@@ -86,9 +93,18 @@ export const client = new ApiClient({
 export const queue = new OfflineQueue(client);
 export const api: Api = createApi(client, queue);
 
+/**
+ * Reference data kept for working through an outage — zones with their
+ * boundaries, rate cards, and the holiday calendar. Filled at sign-in and at
+ * shift open, which are the two moments a handset is reliably somewhere with
+ * signal and about to go somewhere without it.
+ */
+export const cache = new OfflineCache();
+
 /** Called once at startup, before anything is sent. */
 export async function initialise(): Promise<void> {
   await loadDeviceId();
   await loadTokens();
   await queue.load();
+  await cache.load();
 }

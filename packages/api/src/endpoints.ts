@@ -2,6 +2,9 @@ import type { ApiClient } from "./client";
 import type { OfflineQueue } from "./queue";
 import { newEventId } from "./queue";
 import type {
+  CachedHoliday,
+  CachedTariff,
+  CachedZone,
   EndedSession,
   LoginResponse,
   Media,
@@ -45,7 +48,13 @@ export function createApi(client: ApiClient, queue: OfflineQueue) {
     },
 
     zones: {
-      /** Which zone the attendant is standing in. The server decides, not the phone. */
+      /**
+       * Which zone the attendant is standing in.
+       *
+       * The server answers whenever it can be reached, and its answer is the
+       * one that counts. Offline this falls back to the same geometry run
+       * against cached boundaries — see `resolveZoneOffline`.
+       */
       resolve: (lat: number, lng: number) =>
         client.get<Zone & { alternatives: { id: string; code: string; name: string }[] }>(
           "/zones/resolve",
@@ -54,6 +63,17 @@ export function createApi(client: ApiClient, queue: OfflineQueue) {
 
       nearby: (lat: number, lng: number, radius = 500) =>
         client.get<Zone[]>("/zones/nearby", { query: { lat, lng, radius }, anonymous: true }),
+
+      /** Every zone this attendant may work, with boundaries, for the cache. */
+      assigned: () => client.get<CachedZone[]>("/zones", { query: { pageSize: 200 } }),
+    },
+
+    tariffs: {
+      /** The rate card for a zone and vehicle type, cached for offline quoting. */
+      applicable: (zoneId: string, vehicleType: SlotType) =>
+        client.get<CachedTariff>("/tariffs/applicable", { query: { zoneId, vehicleType } }),
+
+      holidays: () => client.get<CachedHoliday[]>("/holidays"),
     },
 
     sessions: {

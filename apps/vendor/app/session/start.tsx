@@ -5,13 +5,14 @@ import {
   ApiError,
   formatPlate,
   normalisePlate,
+  resolveZone,
+  type CachedZone,
   type SlotType,
-  type Zone,
 } from "@kmcp/api";
 
 import { Banner, Button, Card, Field, Loading, Pill } from "../../components/ui";
 import { PlateCamera, type Capture } from "../../components/plate-camera";
-import { api } from "../../lib/api";
+import { api, cache } from "../../lib/api";
 import { useLocation } from "../../lib/location";
 import { useSession } from "../../lib/session";
 import { theme } from "../../lib/theme";
@@ -45,7 +46,8 @@ export default function StartSession() {
   const { shift, refreshShift } = useSession();
   const location = useLocation();
 
-  const [zone, setZone] = React.useState<Zone | null>(null);
+  const [zone, setZone] = React.useState<CachedZone | null>(null);
+  const [zoneOffline, setZoneOffline] = React.useState(false);
   const [zoneError, setZoneError] = React.useState<string | null>(null);
   const [plate, setPlate] = React.useState("");
   const [vehicleType, setVehicleType] = React.useState<SlotType>("CAR");
@@ -61,25 +63,27 @@ export default function StartSession() {
     let cancelled = false;
 
     void (async () => {
-      try {
-        const resolved = await api.zones.resolve(location.fix.lat, location.fix.lng);
-        if (!cancelled) {
-          setZone(resolved);
-          setZoneError(null);
-          const allowed = resolved.allowedVehicleTypeIds ?? [];
-          // Default to the commonest permitted type rather than to CAR, which
-          // a two-wheeler-only lane would refuse.
-          if (allowed.length > 0 && !allowed.includes("CAR")) setVehicleType(allowed[0]);
-        }
-      } catch (cause) {
-        if (!cancelled) {
-          setZoneError(
-            cause instanceof ApiError
-              ? cause.message
-              : "Could not work out which zone you are in.",
-          );
-        }
+      // Asks the server, and falls back to the same geometry against cached
+      // boundaries when it cannot be reached. Either way the server re-checks
+      // this when the session syncs.
+      const resolved = await resolveZone(api, cache, location.fix.lat, location.fix.lng);
+      if (cancelled) return;
+
+      if (!resolved) {
+        setZoneError(
+          "You are not inside any zone you are assigned to. Move to the kerb you are working.",
+        );
+        return;
       }
+
+      setZone(resolved.zone);
+      setZoneOffline(resolved.offline);
+      setZoneError(null);
+
+      const allowed = resolved.zone.allowedVehicleTypeIds ?? [];
+      // Default to the commonest permitted type rather than to CAR, which a
+      // two-wheeler-only lane would refuse.
+      if (allowed.length > 0 && !allowed.includes("CAR")) setVehicleType(allowed[0]);
     })();
 
     return () => {
@@ -170,20 +174,30 @@ export default function StartSession() {
           <Text style={styles.zoneLabel}>YOU ARE IN</Text>
           <Text style={styles.zoneName}>{zone.name}</Text>
           <View style={styles.zoneMeta}>
-            <Pill
-              tone={
-                zone.availability === "FULL"
-                  ? "danger"
-                  : zone.availability === "LIMITED"
-                    ? "warning"
-                    : "success"
-              }
-              label={`${zone.available} of ${zone.capacity} free`}
-            />
+            {zone.available !== undefined ? (
+              <Pill
+                tone={
+                  zone.availability === "FULL"
+                    ? "danger"
+                    : zone.availability === "LIMITED"
+                      ? "warning"
+                      : "success"
+                }
+                label={`${zone.available} of ${zone.capacity} free`}
+              />
+            ) : (
+              <Pill tone="default" label={`${zone.capacity} bays`} />
+            )}
             <Text style={styles.zoneHours}>
               Open {zone.openTime}–{zone.closeTime}
             </Text>
           </View>
+          {zoneOffline ? (
+            <Text style={styles.zoneOffline}>
+              Worked out on this handset — there is no signal. The server checks it again when this
+              session syncs.
+            </Text>
+          ) : null}
         </Card>
       ) : null}
 
@@ -275,6 +289,7 @@ const styles = StyleSheet.create({
   zoneName: { ...theme.text.title, color: theme.colour.text },
   zoneMeta: { flexDirection: "row", alignItems: "center", gap: theme.space(1), flexWrap: "wrap" },
   zoneHours: { ...theme.text.small, color: theme.colour.textMuted },
+  zoneOffline: { ...theme.text.small, color: theme.colour.warning },
   plateInput: { fontSize: 30, fontWeight: "700", letterSpacing: 2, minHeight: 72 },
   section: { gap: theme.space(1) },
   sectionLabel: { ...theme.text.label, color: theme.colour.textMuted },

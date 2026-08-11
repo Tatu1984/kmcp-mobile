@@ -17,7 +17,8 @@ import { theme } from "../../lib/theme";
  * system, which is the whole thing a reconciliation is meant to test.
  */
 export default function ShiftScreen() {
-  const { user, shift, refreshShift, signOut, queued, rejected, syncing, sync } = useSession();
+  const { user, shift, refreshShift, refreshCache, signOut, queued, rejected, syncing, sync, online, cacheAgeHours } =
+    useSession();
   const location = useLocation(false);
 
   const [cash, setCash] = React.useState("");
@@ -32,6 +33,9 @@ export default function ShiftScreen() {
       const fix = await location.locate();
       await api.shifts.open(fix ? { location: { lat: fix.lat, lng: fix.lng } } : {});
       await refreshShift();
+      // Opening a shift is the last moment this handset is reliably somewhere
+      // with signal before it goes somewhere without it.
+      await refreshCache();
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Could not open a shift.");
     } finally {
@@ -68,7 +72,17 @@ export default function ShiftScreen() {
   }
 
   const declared = Number(cash);
-  const canClose = cash.length > 0 && Number.isFinite(declared) && declared >= 0 && !busy;
+  /**
+   * Nothing may close while work is still queued.
+   *
+   * The expected figure is computed by the server from the payments it has
+   * seen. Closing with sessions still on the handset would compare a real cash
+   * count against an incomplete expectation and raise a variance against a
+   * named person for work they did correctly.
+   */
+  const unsynced = queued > 0;
+  const canClose =
+    cash.length > 0 && Number.isFinite(declared) && declared >= 0 && !busy && !unsynced;
 
   return (
     <ScrollView
@@ -79,6 +93,23 @@ export default function ShiftScreen() {
       <Card>
         <Text style={styles.name}>{user?.name ?? "Attendant"}</Text>
         <Text style={styles.role}>{user?.phone ?? ""}</Text>
+        <View style={styles.head}>
+          <Pill tone={online ? "success" : "warning"} label={online ? "Online" : "No signal"} />
+          {cacheAgeHours === null ? (
+            <Pill tone="danger" label="No offline rates" />
+          ) : cacheAgeHours > 24 ? (
+            <Pill tone="warning" label={`Rates ${Math.floor(cacheAgeHours)}h old`} />
+          ) : (
+            <Pill tone="default" label="Rates current" />
+          )}
+        </View>
+        <Button
+          label="Refresh offline rates"
+          variant="secondary"
+          size="medium"
+          onPress={() => void refreshCache()}
+          disabled={!online}
+        />
       </Card>
 
       {rejected > 0 ? (
@@ -184,6 +215,14 @@ export default function ShiftScreen() {
                   value={formatMoney(Math.round(declared * 100) - shift.cashExpected)}
                 />
               </View>
+            ) : null}
+
+            {unsynced ? (
+              <Banner
+                tone="warning"
+                title={`${queued} action${queued === 1 ? "" : "s"} have not reached the server`}
+                body="The expected figure is worked out from what the server has seen, so closing now would flag a variance you did not cause. Send them first."
+              />
             ) : null}
 
             {error ? <Banner tone="danger" title={error} /> : null}
