@@ -1,0 +1,187 @@
+import * as React from "react";
+import { Platform } from "react-native";
+import NetInfo from "@react-native-community/netinfo";
+import type { CitizenProfile } from "@kmcp/api";
+
+import {
+  api,
+  initialise,
+  isConfigured,
+  loadTokens,
+  onSignedOut,
+  saveTokens,
+} from "./api";
+import { addPlate, loadPlates, removePlate } from "./vehicles";
+
+/**
+ * Who is signed in, which plates are theirs, and whether there is a network.
+ *
+ * All three are needed on more than one screen and none of them is worth
+ * fetching twice, so they are resolved once here.
+ *
+ * Signing in is two steps rather than one, because an OTP is: asking for a code
+ * and presenting it are separate acts that fail for different reasons, and a
+ * single `signIn(phone, code)` would have no way to express "the code was
+ * sent, now wait". `pendingPhone` is what the second screen knows.
+ */
+
+interface SessionState {
+  ready: boolean;
+  configured: boolean;
+  user: CitizenProfile | null;
+  online: boolean;
+  /** The number a code was sent to, while one is outstanding. */
+  pendingPhone: string | null;
+  /**
+   * The code, when the server volunteered it.
+   *
+   * Only ever populated outside production, where the server returns the code
+   * it generated so a demo build works without an SMS gateway. It is shown
+   * labelled as a test aid, never filled in silently — an app that signs itself
+   * in is indistinguishable from one that has stopped checking.
+   */
+  devCode: string | null;
+  /** Plates this person has registered. Device-local for now — see vehicles.ts. */
+  plates: string[];
+  requestCode: (phone: string) => Promise<void>;
+  verifyCode: (code: string) => Promise<void>;
+  cancelCode: () => void;
+  signOut: () => Promise<void>;
+  savePlate: (plate: string) => Promise<void>;
+  forgetPlate: (plate: string) => Promise<void>;
+}
+
+const SessionContext = React.createContext<SessionState | null>(null);
+
+/** "+91 98301 14227" as the server wants it, and as a person types it. */
+export function normalisePhone(input: string): string {
+  const digits = input.replace(/\D/g, "");
+  const last10 = digits.slice(-10);
+  return last10.length === 10 ? `+91${last10}` : input.trim();
+}
+
+export function formatPhone(phone: string): string {
+  const digits = phone.replace(/\D/g, "").slice(-10);
+  if (digits.length !== 10) return phone;
+  return `+91 ${digits.slice(0, 5)} ${digits.slice(5)}`;
+}
+
+export function SessionProvider({ children }: { children: React.ReactNode }) {
+  const [ready, setReady] = React.useState(false);
+  const [user, setUser] = React.useState<CitizenProfile | null>(null);
+  const [online, setOnline] = React.useState(true);
+  const [pendingPhone, setPendingPhone] = React.useState<string | null>(null);
+  const [devCode, setDevCode] = React.useState<string | null>(null);
+  const [plates, setPlates] = React.useState<string[]>([]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+
+    void (async () => {
+      await initialise();
+      onSignedOut(() => setUser(null));
+
+      const stored = await loadPlates();
+      if (!cancelled) setPlates(stored);
+
+      const tokens = await loadTokens();
+      if (tokens && isConfigured()) {
+        try {
+          const me = await api.me.profile();
+          if (!cancelled) setUser(me);
+        } catch {
+          // An expired session on a cold start is ordinary, and so is opening
+          // the app on a train with no signal. Neither is worth an error: the
+          // map works signed out, so land there and let them sign in when they
+          // need to.
+        }
+      }
+      if (!cancelled) setReady(true);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener((state) => {
+      setOnline(Boolean(state.isConnected && state.isInternetReachable !== false));
+    });
+    return unsubscribe;
+  }, []);
+
+  const requestCode = React.useCallback(async (phone: string) => {
+    const normalised = normalisePhone(phone);
+    const result = await api.auth.requestOtp(normalised);
+    setPendingPhone(normalised);
+    setDevCode(result.devCode ?? null);
+  }, []);
+
+  const verifyCode = React.useCallback(
+    async (code: string) => {
+      if (!pendingPhone) throw new Error("No code has been requested.");
+
+      const platform = Platform.OS === "ios" ? "ios" : "android";
+      const result = await api.auth.verifyOtp(pendingPhone, code, platform);
+      if (!result.tokens) {
+        // The OTP path never asks for a second factor, so tokens missing here
+        // means the server changed shape rather than that anything is pending.
+        throw new Error("The server did not return a sign-in. Try again.");
+      }
+
+      await saveTokens(result.tokens);
+      setUser(await api.me.profile());
+      setPendingPhone(null);
+      setDevCode(null);
+    },
+    [pendingPhone],
+  );
+
+  const cancelCode = React.useCallback(() => {
+    setPendingPhone(null);
+    setDevCode(null);
+  }, []);
+
+  const signOut = React.useCallback(async () => {
+    const tokens = await loadTokens();
+    if (tokens?.refreshToken) await api.auth.logout(tokens.refreshToken).catch(() => undefined);
+    await saveTokens(null);
+    setUser(null);
+    // Plates are deliberately kept. They live on this handset rather than on
+    // the account, so clearing them at sign-out would lose something the
+    // server has no copy of.
+  }, []);
+
+  const savePlate = React.useCallback(async (plate: string) => {
+    setPlates(await addPlate(plate));
+  }, []);
+
+  const forgetPlate = React.useCallback(async (plate: string) => {
+    setPlates(await removePlate(plate));
+  }, []);
+
+  const value: SessionState = {
+    ready,
+    configured: isConfigured(),
+    user,
+    online,
+    pendingPhone,
+    devCode,
+    plates,
+    requestCode,
+    verifyCode,
+    cancelCode,
+    signOut,
+    savePlate,
+    forgetPlate,
+  };
+
+  return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
+}
+
+export function useSession(): SessionState {
+  const context = React.useContext(SessionContext);
+  if (!context) throw new Error("useSession must be used inside SessionProvider");
+  return context;
+}
