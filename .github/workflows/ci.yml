@@ -1,8 +1,8 @@
 name: CI
 
-# The shared package is the reason this repo exists, and it is also the thing
-# that breaks both apps at once when it changes. Typechecking every workspace on
-# every push is what catches that before a handset does.
+# packages/api is shared with kmcp-vendor, in its own repository, with nothing
+# enforcing that the two copies stay identical. Typechecking every workspace on
+# every push at least catches a change that breaks this app's own use of it.
 
 on:
   push:

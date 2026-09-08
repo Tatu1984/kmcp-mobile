@@ -1,17 +1,15 @@
-# KMCP mobile
+# KMCP citizen app
 
-Two applications, one repository:
+The public app: find a government car park, see what is free bay by bay, find
+the car an attendant has started a session for, and pay for it.
 
-- **`apps/vendor`** — what a parking attendant uses at the kerb. Starts and ends
-  parking sessions, photographs the plate, takes cash, and runs a shift.
-- **`apps/citizen`** — the public app. Find a government car park, see what is
-  free bay by bay, find the car an attendant has started a session for, and pay
-  for it.
-
-They share **`packages/api`**: the API client, the types the server actually
-returns, and the offline queue. That package is the reason this is one
-repository rather than two — the alternative is maintaining the same client
-twice and letting the copies drift.
+This repository used to also hold `apps/vendor`, the attendant app used at the
+kerb. That app now lives in its own repository, **kmcp-vendor**, so a change to
+one app's release cycle no longer has to touch the other's. This repo keeps
+**`packages/api`**: the API client, the types the server actually returns, and
+the offline queue — the same package `kmcp-vendor` carries its own copy of.
+Since the two are no longer one repository, nothing enforces that the copies
+stay identical; see `kmcp-vendor`'s README for how that is being handled.
 
 ## The rule that shapes everything here
 
@@ -25,18 +23,17 @@ without an app release, and what stops a modified build from parking for free.
 
 ```
 npm install
-npm run vendor      # Expo dev server for the attendant app
 npm run citizen     # Expo dev server for the citizen app
 npm run typecheck
 ```
 
-The apps read `EXPO_PUBLIC_API_URL`. Without it they run against nothing and say
+The app reads `EXPO_PUBLIC_API_URL`. Without it it runs against nothing and says
 so, rather than appearing to work.
 
-The citizen app also reads `EXPO_PUBLIC_GOOGLE_MAPS_KEY`, and only on Android:
-Google Maps draws a blank grey rectangle without one rather than failing, so the
-map screen checks for a key up front and falls back to a plain list that says
-why. iOS uses Apple Maps and needs nothing. The key is never committed — see
+It also reads `EXPO_PUBLIC_GOOGLE_MAPS_KEY`, and only on Android: Google Maps
+draws a blank grey rectangle without one rather than failing, so the map screen
+checks for a key up front and falls back to a plain list that says why. iOS
+uses Apple Maps and needs nothing. The key is never committed — see
 `apps/citizen/.env.example`.
 
 ## What the citizen app is still waiting for

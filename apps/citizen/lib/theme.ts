@@ -8,9 +8,9 @@
  * smear. So: light ground, dark ink, and the same three status hues used for
  * exactly one job each.
  *
- * The structure mirrors `apps/vendor/lib/theme.ts` on purpose, so that anyone
- * moving between the two apps finds `space()`, `radius`, `text` and `minTouch`
- * where they expect them, even though every value differs.
+ * The structure mirrors the attendant app's theme in kmcp-vendor on purpose,
+ * so that anyone moving between the two apps finds `space()`, `radius`, `text`
+ * and `minTouch` where they expect them, even though every value differs.
  */
 export const theme = {
   colour: {

@@ -10,8 +10,8 @@ import {
 /**
  * One client for the whole app.
  *
- * The shape follows `apps/vendor/lib/api.ts` deliberately, but two things about
- * it are different and neither is an oversight:
+ * The shape follows the attendant app's client in kmcp-vendor deliberately,
+ * but two things about it are different and neither is an oversight:
  *
  * 1. There is no device binding. An attendant's account is tied to one handset
  *    because that is what stops a depot login being passed around; a citizen
