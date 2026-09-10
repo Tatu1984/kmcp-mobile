@@ -42,12 +42,35 @@ export default function MapScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const location = useLocation();
-  const { plates } = useSession();
+  const { user } = useSession();
 
   const [zones, setZones] = React.useState<NearbyZone[] | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [query, setQuery] = React.useState("");
+  const [firstPlate, setFirstPlate] = React.useState<string | null>(null);
+
+  // The shortcut on the finder bar needs one plate, not the whole list — so
+  // this is a light read, and a failure of it (signed out, or the route not
+  // yet built) just falls back to "add your plate" rather than an error.
+  React.useEffect(() => {
+    if (!user) {
+      setFirstPlate(null);
+      return;
+    }
+    let cancelled = false;
+    void api.me
+      .vehicles()
+      .then((found) => {
+        if (!cancelled) setFirstPlate(found[0]?.plateNumber ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setFirstPlate(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
 
   const fix = location.status === "ready" ? location.fix : KOLKATA;
   const locating = location.status === "locating" || location.status === "idle";
@@ -132,14 +155,14 @@ export default function MapScreen() {
         <Pressable
           accessibilityRole="button"
           onPress={() =>
-            plates[0] ? router.push(`/parked/${plates[0]}`) : router.push("/vehicles")
+            firstPlate ? router.push(`/parked/${firstPlate}`) : router.push("/vehicles")
           }
           style={({ pressed }) => [styles.finder, pressed && styles.finderPressed]}
         >
           <Text style={styles.finderGlyph}>⌂</Text>
           <Text style={styles.finderText} numberOfLines={1}>
-            {plates[0]
-              ? `Find my car · ${formatPlate(plates[0])}`
+            {firstPlate
+              ? `Find my car · ${formatPlate(firstPlate)}`
               : "Add your number plate to find your car"}
           </Text>
           <Text style={styles.finderChevron}>›</Text>

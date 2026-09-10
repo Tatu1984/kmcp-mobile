@@ -548,4 +548,19 @@ export interface MyPass {
   validFrom: string;
   validTo: string;
   qrCode: string | null;
+  /**
+   * Present only on the response to a purchase that needs a gateway checkout.
+   * `id` above is the pass, not the payment — `paymentId` is what
+   * `payments.verify` needs once the checkout sheet closes.
+   */
+  paymentId?: string;
+  gatewayKeyId?: string;
+  gatewayOrder?: { id: string; amount: number; currency: string };
+}
+
+/** What the client hands back after Razorpay checkout completes. */
+export interface VerifyPayment {
+  razorpayOrderId: string;
+  razorpayPaymentId: string;
+  razorpaySignature: string;
 }

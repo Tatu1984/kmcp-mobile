@@ -11,7 +11,8 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
-    "dev": "npm run start --workspace @kmcp/citizen"
+    "dev": "npm run start --workspace @kmcp/citizen",
+    "dev:local": "npm run dev:local --workspace @kmcp/citizen"
   },
   "engines": {
     "node": ">=22"

@@ -1,20 +1,29 @@
 import * as React from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
-import { MISSING, formatPlate } from "@kmcp/api";
+import {
+  ApiError,
+  MISSING,
+  formatPlate,
+  gapOf,
+  normalisePlate,
+  type MyVehicle,
+} from "@kmcp/api";
 
 import {
+  Banner,
   Button,
   Card,
   Field,
   Label,
+  Loading,
   Plate,
   Screen,
   Sub,
   Unavailable,
 } from "../components/ui";
+import { api } from "../lib/api";
 import { useSession } from "../lib/session";
-import { looksLikePlate } from "../lib/vehicles";
 import { theme } from "../lib/theme";
 
 /**
@@ -24,20 +33,125 @@ import { theme } from "../lib/theme";
  * so a plate is the only handle the app has on "my car". Registering one is
  * what makes the "find my car" path work at all.
  *
- * These are held on this handset, which is a stopgap and is stated as one on
- * the screen rather than hidden. `Vehicle.ownerUserId` exists in the schema and
- * is indexed; there is simply no route a citizen can use to write it, so there
- * is nowhere on the server to put this yet. The consequence is small but real —
- * a reinstall loses them, and they do not follow the account to a second phone
- * — and it is the sort of thing that should be discovered by reading a line of
- * text, not by losing something.
+ * Backed by `GET/POST/DELETE /me/vehicles`. If a build lands on a server that
+ * has not shipped those yet, the screen says so plainly (via `MISSING.
+ * myVehicles`) rather than showing an empty list as if nobody had ever added
+ * a plate.
  */
 export default function Vehicles() {
   const router = useRouter();
-  const { plates, savePlate, forgetPlate } = useSession();
+  const { user } = useSession();
 
+  const [vehicles, setVehicles] = React.useState<MyVehicle[] | null>(null);
+  const [gap, setGap] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [loading, setLoading] = React.useState(true);
   const [input, setInput] = React.useState("");
-  const canAdd = looksLikePlate(input) && !plates.includes(input.replace(/[^A-Za-z0-9]/g, "").toUpperCase());
+  const [adding, setAdding] = React.useState(false);
+  const [removingId, setRemovingId] = React.useState<string | null>(null);
+
+  const load = React.useCallback(async () => {
+    try {
+      setVehicles(await api.me.vehicles());
+    } catch (cause) {
+      if (gapOf(cause)) setGap(true);
+      else {
+        setError(
+          cause instanceof ApiError ? cause.message : "Could not load your vehicles.",
+        );
+      }
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (!user) {
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+
+    void (async () => {
+      await load();
+      if (!cancelled) setLoading(false);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user, load]);
+
+  const plateNumbers = React.useMemo(() => new Set(vehicles?.map((v) => v.plateNumber) ?? []), [
+    vehicles,
+  ]);
+  const canAdd = looksLikePlate(input) && !plateNumbers.has(normalisePlate(input));
+
+  const addVehicle = React.useCallback(async () => {
+    if (!canAdd) return;
+    setError(null);
+    setAdding(true);
+    try {
+      const created = await api.me.addVehicle(normalisePlate(input), "CAR");
+      setVehicles((current) => (current ? [...current, created] : [created]));
+      setInput("");
+    } catch (cause) {
+      setError(
+        gapOf(cause)
+          ? `${MISSING.myVehicles!.because}\n\nNeeds: ${MISSING.myVehicles!.route}`
+          : cause instanceof ApiError
+            ? cause.message
+            : "That vehicle could not be added.",
+      );
+    } finally {
+      setAdding(false);
+    }
+  }, [canAdd, input]);
+
+  const removeVehicle = React.useCallback(async (vehicle: MyVehicle) => {
+    setError(null);
+    setRemovingId(vehicle.id);
+    try {
+      await api.me.removeVehicle(vehicle.id);
+      setVehicles((current) => (current ? current.filter((v) => v.id !== vehicle.id) : current));
+    } catch (cause) {
+      setError(
+        gapOf(cause)
+          ? `${MISSING.myVehicles!.because}\n\nNeeds: ${MISSING.myVehicles!.route}`
+          : cause instanceof ApiError
+            ? cause.message
+            : "That vehicle could not be removed.",
+      );
+    } finally {
+      setRemovingId(null);
+    }
+  }, []);
+
+  if (!user) {
+    return (
+      <Screen>
+        <Card raise>
+          <Label>Sign in first</Label>
+          <Sub style={styles.body}>
+            Your vehicles belong to your account. Sign in with your mobile number to see them.
+          </Sub>
+        </Card>
+        <Button label="Sign in" onPress={() => router.push("/sign-in")} />
+      </Screen>
+    );
+  }
+
+  if (loading) return <Loading label="Loading your vehicles" />;
+
+  if (gap) {
+    return (
+      <Screen>
+        <Unavailable
+          title="Vehicles are not readable yet"
+          body={`${MISSING.myVehicles!.because}\n\nNeeds: ${MISSING.myVehicles!.route}`}
+        />
+        {error ? <Banner tone="crit" title={error} /> : null}
+      </Screen>
+    );
+  }
 
   return (
     <Screen>
@@ -49,6 +163,8 @@ export default function Vehicles() {
         </Sub>
       </Card>
 
+      {error ? <Banner tone="crit" title="That did not go through" body={error} /> : null}
+
       <Field
         label="Number plate"
         value={input}
@@ -58,36 +174,42 @@ export default function Vehicles() {
         placeholder="WB 02 AB 1234"
         maxLength={14}
         style={styles.plateInput}
-        onSubmitEditing={() => {
-          if (canAdd) void savePlate(input).then(() => setInput(""));
-        }}
+        onSubmitEditing={() => void addVehicle()}
         returnKeyType="done"
       />
 
       <Button
         label="Add this plate"
         disabled={!canAdd}
-        onPress={() => void savePlate(input).then(() => setInput(""))}
+        busy={adding}
+        onPress={() => void addVehicle()}
       />
 
-      {plates.length > 0 ? (
+      {vehicles && vehicles.length > 0 ? (
         <View style={styles.list}>
-          {plates.map((plate) => (
-            <View key={plate} style={styles.row}>
+          {vehicles.map((vehicle) => (
+            <View key={vehicle.id} style={styles.row}>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={`Find the car with plate ${formatPlate(plate)}`}
-                onPress={() => router.push(`/parked/${plate}`)}
+                accessibilityLabel={`Find the car with plate ${formatPlate(vehicle.plateNumber)}`}
+                onPress={() => router.push(`/parked/${vehicle.plateNumber}`)}
                 style={({ pressed }) => [styles.rowMain, pressed && styles.rowPressed]}
               >
-                <Plate>{formatPlate(plate)}</Plate>
-                <Text style={styles.rowHint}>Tap to see whether it is parked</Text>
+                <Plate>{formatPlate(vehicle.plateNumber)}</Plate>
+                <Text style={styles.rowHint}>
+                  {vehicle.makeModel ?? "Tap to see whether it is parked"}
+                </Text>
               </Pressable>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={`Remove ${formatPlate(plate)}`}
-                onPress={() => void forgetPlate(plate)}
-                style={({ pressed }) => [styles.remove, pressed && styles.rowPressed]}
+                accessibilityLabel={`Remove ${formatPlate(vehicle.plateNumber)}`}
+                onPress={() => void removeVehicle(vehicle)}
+                disabled={removingId === vehicle.id}
+                style={({ pressed }) => [
+                  styles.remove,
+                  pressed && styles.rowPressed,
+                  removingId === vehicle.id && styles.rowDisabled,
+                ]}
               >
                 <Text style={styles.removeGlyph}>×</Text>
               </Pressable>
@@ -95,13 +217,22 @@ export default function Vehicles() {
           ))}
         </View>
       ) : null}
-
-      <Unavailable
-        title="These plates are kept on this phone"
-        body={`${MISSING.myVehicles!.because}\n\nSo a plate added here is lost if the app is reinstalled, and does not follow your account to another phone.\n\nNeeds: ${MISSING.myVehicles!.route}`}
-      />
     </Screen>
   );
+}
+
+/**
+ * Whether a string looks like an Indian registration.
+ *
+ * Permissive on purpose. This only decides whether the "Add" button is
+ * enabled; the server is what decides whether a plate exists, and a
+ * validator here that is stricter than reality would lock somebody out of
+ * their own car over a series it has never heard of — Bharat series, defence
+ * plates, older formats.
+ */
+function looksLikePlate(plate: string): boolean {
+  const clean = normalisePlate(plate);
+  return clean.length >= 6 && clean.length <= 12 && /^[A-Z]{2}/.test(clean);
 }
 
 const styles = StyleSheet.create({
@@ -125,6 +256,7 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.md,
   },
   rowPressed: { backgroundColor: theme.colour.raise },
+  rowDisabled: { opacity: 0.5 },
   rowHint: { fontSize: 12.5, color: theme.colour.muted },
   remove: {
     width: theme.minTouch,

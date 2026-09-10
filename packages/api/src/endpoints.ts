@@ -27,6 +27,7 @@ import type {
   SlotSummary,
   SlotType,
   UploadTicket,
+  VerifyPayment,
   WalletBalance,
   WalletEntry,
   WalletTopUp,
@@ -289,6 +290,19 @@ export function createApi(client: ApiClient, queue: OfflineQueue) {
           mode,
           idempotencyKey: newEventId(),
         }),
+
+      /**
+       * Confirms a checkout the client just completed.
+       *
+       * Signed with a secret the client never held, so this is what actually
+       * captures a gateway payment for the citizen's own screen — the webhook
+       * remains the authority, this exists so a receipt shows up without
+       * waiting for it. Works for any gateway payment a citizen may confirm:
+       * a session payment, a wallet top-up, or a pass purchase — they all
+       * create a `Payment` row and are verified the same way.
+       */
+      verify: (paymentId: string, dto: VerifyPayment) =>
+        client.post<Payment>(`/payments/${encodeURIComponent(paymentId)}/verify`, dto),
     },
 
     /**

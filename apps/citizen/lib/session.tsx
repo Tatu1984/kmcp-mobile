@@ -11,7 +11,6 @@ import {
   onSignedOut,
   saveTokens,
 } from "./api";
-import { addPlate, loadPlates, removePlate } from "./vehicles";
 
 /**
  * Who is signed in, which plates are theirs, and whether there is a network.
@@ -41,14 +40,10 @@ interface SessionState {
    * in is indistinguishable from one that has stopped checking.
    */
   devCode: string | null;
-  /** Plates this person has registered. Device-local for now — see vehicles.ts. */
-  plates: string[];
   requestCode: (phone: string) => Promise<void>;
   verifyCode: (code: string) => Promise<void>;
   cancelCode: () => void;
   signOut: () => Promise<void>;
-  savePlate: (plate: string) => Promise<void>;
-  forgetPlate: (plate: string) => Promise<void>;
 }
 
 const SessionContext = React.createContext<SessionState | null>(null);
@@ -72,7 +67,6 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [online, setOnline] = React.useState(true);
   const [pendingPhone, setPendingPhone] = React.useState<string | null>(null);
   const [devCode, setDevCode] = React.useState<string | null>(null);
-  const [plates, setPlates] = React.useState<string[]>([]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -80,9 +74,6 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     void (async () => {
       await initialise();
       onSignedOut(() => setUser(null));
-
-      const stored = await loadPlates();
-      if (!cancelled) setPlates(stored);
 
       const tokens = await loadTokens();
       if (tokens && isConfigured()) {
@@ -148,17 +139,6 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     if (tokens?.refreshToken) await api.auth.logout(tokens.refreshToken).catch(() => undefined);
     await saveTokens(null);
     setUser(null);
-    // Plates are deliberately kept. They live on this handset rather than on
-    // the account, so clearing them at sign-out would lose something the
-    // server has no copy of.
-  }, []);
-
-  const savePlate = React.useCallback(async (plate: string) => {
-    setPlates(await addPlate(plate));
-  }, []);
-
-  const forgetPlate = React.useCallback(async (plate: string) => {
-    setPlates(await removePlate(plate));
   }, []);
 
   const value: SessionState = {
@@ -168,13 +148,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     online,
     pendingPhone,
     devCode,
-    plates,
     requestCode,
     verifyCode,
     cancelCode,
     signOut,
-    savePlate,
-    forgetPlate,
   };
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

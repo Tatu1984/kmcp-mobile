@@ -23,6 +23,7 @@ import {
   Unavailable,
 } from "../../components/ui";
 import { api } from "../../lib/api";
+import { useRazorpayCheckout } from "../../lib/checkout";
 import { useSession } from "../../lib/session";
 import { theme } from "../../lib/theme";
 
@@ -56,7 +57,32 @@ export default function Wallet() {
   const [error, setError] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [chosen, setChosen] = React.useState<Paise>(TOP_UPS[1]!);
-  const [topUpNote, setTopUpNote] = React.useState<string | null>(null);
+  const [topUpBusy, setTopUpBusy] = React.useState(false);
+  const [topUpError, setTopUpError] = React.useState<string | null>(null);
+  const [topUpSuccess, setTopUpSuccess] = React.useState<string | null>(null);
+
+  const { open, modal } = useRazorpayCheckout();
+
+  const load = React.useCallback(async () => {
+    const [balanceResult, entriesResult] = await Promise.allSettled([
+      api.wallet.balance(),
+      api.wallet.entries(),
+    ]);
+
+    if (balanceResult.status === "fulfilled") setBalance(balanceResult.value);
+    if (entriesResult.status === "fulfilled") setEntries(entriesResult.value);
+
+    if (balanceResult.status === "rejected") {
+      if (gapOf(balanceResult.reason)) setGap(true);
+      else {
+        setError(
+          balanceResult.reason instanceof ApiError
+            ? balanceResult.reason.message
+            : "Could not load your wallet.",
+        );
+      }
+    }
+  }, []);
 
   React.useEffect(() => {
     if (!user) {
@@ -66,32 +92,57 @@ export default function Wallet() {
     let cancelled = false;
 
     void (async () => {
-      const [balanceResult, entriesResult] = await Promise.allSettled([
-        api.wallet.balance(),
-        api.wallet.entries(),
-      ]);
-      if (cancelled) return;
-
-      if (balanceResult.status === "fulfilled") setBalance(balanceResult.value);
-      if (entriesResult.status === "fulfilled") setEntries(entriesResult.value);
-
-      if (balanceResult.status === "rejected") {
-        if (gapOf(balanceResult.reason)) setGap(true);
-        else {
-          setError(
-            balanceResult.reason instanceof ApiError
-              ? balanceResult.reason.message
-              : "Could not load your wallet.",
-          );
-        }
-      }
-      setLoading(false);
+      await load();
+      if (!cancelled) setLoading(false);
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [user]);
+  }, [user, load]);
+
+  const startTopUp = React.useCallback(async () => {
+    setTopUpError(null);
+    setTopUpSuccess(null);
+    setTopUpBusy(true);
+    try {
+      const topUp = await api.wallet.topUp(chosen);
+      const result = await open({
+        gatewayKeyId: topUp.gatewayKeyId,
+        gatewayOrder: topUp.gatewayOrder,
+        description: `Add ${formatMoney(topUp.amount, { decimals: false })} to your wallet`,
+      });
+
+      if (result.status === "cancelled") {
+        setTopUpBusy(false);
+        return;
+      }
+      if (result.status === "error") {
+        setTopUpError(result.message);
+        setTopUpBusy(false);
+        return;
+      }
+
+      await api.payments.verify(topUp.id, {
+        razorpayOrderId: result.razorpayOrderId,
+        razorpayPaymentId: result.razorpayPaymentId,
+        razorpaySignature: result.razorpaySignature,
+      });
+
+      await load();
+      setTopUpSuccess(`Added ${formatMoney(topUp.amount, { decimals: false })} to your wallet.`);
+    } catch (cause) {
+      setTopUpError(
+        gapOf(cause)
+          ? `${MISSING.wallet!.because}\n\nNeeds: ${MISSING.wallet!.route}`
+          : cause instanceof ApiError
+            ? cause.message
+            : "That top-up could not be completed.",
+      );
+    } finally {
+      setTopUpBusy(false);
+    }
+  }, [chosen, open, load]);
 
   if (!user) {
     return (
@@ -158,22 +209,20 @@ export default function Wallet() {
         <Money>{formatMoney(balance.balance)}</Money>
       </Card>
 
+      <Card onPress={() => router.push("/passes")} accessibilityLabel="Buy a pass">
+        <View style={styles.passRow}>
+          <View style={styles.passRowText}>
+            <Text style={styles.passRowTitle}>Buy a pass</Text>
+            <Sub style={styles.body}>A season ticket for a vehicle, paid once.</Sub>
+          </View>
+          <Text style={styles.chevron}>›</Text>
+        </View>
+      </Card>
+
       <Button
         label={`Add ${formatMoney(chosen, { decimals: false })}`}
-        onPress={() => {
-          void api.wallet
-            .topUp(chosen)
-            .then(() => setTopUpNote(null))
-            .catch((cause: unknown) => {
-              setTopUpNote(
-                gapOf(cause)
-                  ? `${MISSING.wallet!.because}\n\nNeeds: ${MISSING.wallet!.route}`
-                  : cause instanceof ApiError
-                    ? cause.message
-                    : "That top-up could not be started.",
-              );
-            });
-        }}
+        busy={topUpBusy}
+        onPress={() => void startTopUp()}
       />
 
       <View style={styles.chips}>
@@ -196,7 +245,10 @@ export default function Wallet() {
         })}
       </View>
 
-      {topUpNote ? <Unavailable title="Adding money is not switched on" body={topUpNote} /> : null}
+      {topUpSuccess ? <Banner tone="good" title={topUpSuccess} /> : null}
+      {topUpError ? <Banner tone="crit" title="That top-up did not go through" body={topUpError} /> : null}
+
+      {modal}
 
       <Label>Recent</Label>
       {entries === null ? (
@@ -260,6 +312,11 @@ const styles = StyleSheet.create({
   body: { fontSize: 13.5, lineHeight: 20 },
 
   balanceCard: { alignItems: "flex-start", gap: theme.space(0.5) },
+
+  passRow: { flexDirection: "row", alignItems: "center", gap: theme.space(1.5) },
+  passRowText: { flex: 1, gap: 2 },
+  passRowTitle: { fontSize: 16, fontWeight: "700", color: theme.colour.ink },
+  chevron: { fontSize: 22, color: theme.colour.muted },
 
   chips: { flexDirection: "row", gap: theme.space(1) },
   chip: {

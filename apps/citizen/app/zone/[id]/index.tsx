@@ -2,6 +2,7 @@ import * as React from "react";
 import { Linking, StyleSheet, Text, View } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import {
+  ApiError,
   MISSING,
   formatMoney,
   gapOf,
@@ -57,7 +58,9 @@ export default function ZoneDetail() {
   const [tariff, setTariff] = React.useState<CachedTariff | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [zoneError, setZoneError] = React.useState<string | null>(null);
-  const [saveNote, setSaveNote] = React.useState(false);
+  const [favourited, setFavourited] = React.useState(false);
+  const [favouriteBusy, setFavouriteBusy] = React.useState(false);
+  const [favouriteNote, setFavouriteNote] = React.useState<string | null>(null);
 
   /**
    * The zone itself, only when the map did not already hand it over.
@@ -145,6 +148,53 @@ export default function ZoneDetail() {
       cancelled = true;
     };
   }, [id, quotedType]);
+
+  /**
+   * Whether this zone is already saved.
+   *
+   * Left unfavourited on failure rather than blocking the rest of the screen —
+   * a citizen should still see a car park's details even when the favourites
+   * door happens to be shut.
+   */
+  React.useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    void api.me
+      .favourites()
+      .then((found) => {
+        if (!cancelled) setFavourited(found.some((f) => f.zoneId === id));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
+  const toggleFavourite = React.useCallback(async () => {
+    if (!id || favouriteBusy) return;
+    setFavouriteNote(null);
+    setFavouriteBusy(true);
+    const was = favourited;
+    try {
+      if (was) {
+        await api.me.removeFavourite(id);
+        setFavourited(false);
+      } else {
+        await api.me.addFavourite(id);
+        setFavourited(true);
+      }
+    } catch (cause) {
+      setFavouriteNote(
+        gapOf(cause)
+          ? `${MISSING.favourites!.because}\n\nNeeds: ${MISSING.favourites!.route}`
+          : cause instanceof ApiError
+            ? cause.message
+            : `That car park could not be ${was ? "unsaved" : "saved"}.`,
+      );
+    } finally {
+      setFavouriteBusy(false);
+    }
+  }, [id, favourited, favouriteBusy]);
 
   /** Free and total per vehicle type. Only the bay list can answer this. */
   const byType = React.useMemo(() => {
@@ -308,20 +358,17 @@ export default function ZoneDetail() {
           style={styles.grow}
         />
         <Button
-          label="☆"
-          variant="ghost"
+          label={favourited ? "★" : "☆"}
+          variant={favourited ? "dark" : "ghost"}
           size="medium"
-          onPress={() => setSaveNote(true)}
+          busy={favouriteBusy}
+          onPress={() => void toggleFavourite()}
           style={styles.star}
         />
       </View>
 
-      {saveNote ? (
-        <Banner
-          tone="info"
-          title="Saved car parks are not switched on yet"
-          body={`${MISSING.favourites!.because} Needs: ${MISSING.favourites!.route}`}
-        />
+      {favouriteNote ? (
+        <Banner tone="crit" title="That did not go through" body={favouriteNote} />
       ) : null}
 
       <Sub style={styles.footnote}>

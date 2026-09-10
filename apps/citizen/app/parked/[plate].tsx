@@ -29,6 +29,7 @@ import {
   Unavailable,
 } from "../../components/ui";
 import { api } from "../../lib/api";
+import { useRazorpayCheckout } from "../../lib/checkout";
 import { useSession } from "../../lib/session";
 import { theme } from "../../lib/theme";
 
@@ -60,7 +61,76 @@ export default function Parked() {
   const [error, setError] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [payNote, setPayNote] = React.useState<string | null>(null);
-  const [paying, setPaying] = React.useState(false);
+  const [paySuccess, setPaySuccess] = React.useState<string | null>(null);
+  const [payingWallet, setPayingWallet] = React.useState(false);
+  const [payingGateway, setPayingGateway] = React.useState(false);
+
+  const { open, modal } = useRazorpayCheckout();
+
+  /**
+   * Two attempts, in the order they should exist.
+   *
+   * `GET /me/sessions?status=ACTIVE` is the right call — it is scoped to the
+   * signed-in citizen and cannot be pointed at somebody else's plate. It
+   * does not exist yet. The plate lookup is what the attendant app uses and
+   * it does exist, but it is guarded by `session.read` and returns any
+   * vehicle's session to whoever asks, which is precisely why a citizen
+   * must not be given it as it stands.
+   */
+  const fetchSession = React.useCallback(async (): Promise<void> => {
+    if (!plate) return;
+
+    try {
+      const mine = await api.me.sessions("ACTIVE");
+      const match = mine.find((s) => s.plateNumber === plate);
+      if (match) {
+        setSession({
+          id: match.id,
+          code: match.code,
+          zoneId: match.zone.id,
+          plateNumber: match.plateNumber,
+          status: match.status,
+          startAt: match.startAt,
+          endAt: match.endAt,
+          durationMinutes: match.durationMinutes,
+          payableAmount: match.payableAmount,
+          taxAmount: 0,
+          penaltyAmount: 0,
+          zone: match.zone,
+        });
+        return;
+      }
+      setSession(null);
+      return;
+    } catch (cause) {
+      if (!gapOf(cause)) {
+        setError(
+          cause instanceof ApiError
+            ? cause.message
+            : "Could not check whether your car is parked.",
+        );
+        return;
+      }
+      // Fall through to the attendant-era lookup below.
+    }
+
+    try {
+      const found = await api.sessions.lookup(plate);
+      setSession(found.active);
+    } catch (cause) {
+      if (gapOf(cause)) {
+        setLookupGap(
+          `${MISSING.mySessions!.because}\n\nThe lookup that would answer this today, ${MISSING.plateLookup!.route}, is staff-only: it returns any vehicle's session to whoever asks, which is exactly why a citizen must not be handed it as it stands.\n\nNeeds: ${MISSING.mySessions!.route}`,
+        );
+      } else {
+        setError(
+          cause instanceof ApiError
+            ? cause.message
+            : "Could not check whether your car is parked.",
+        );
+      }
+    }
+  }, [plate]);
 
   React.useEffect(() => {
     if (!plate || !user) {
@@ -70,98 +140,28 @@ export default function Parked() {
     let cancelled = false;
 
     void (async () => {
-      /**
-       * Two attempts, in the order they should exist.
-       *
-       * `GET /me/sessions?status=ACTIVE` is the right call — it is scoped to the
-       * signed-in citizen and cannot be pointed at somebody else's plate. It
-       * does not exist yet. The plate lookup is what the attendant app uses and
-       * it does exist, but it is guarded by `session.read` and returns any
-       * vehicle's session to whoever asks, which is precisely why a citizen
-       * must not be given it as it stands.
-       */
-      try {
-        const mine = await api.me.sessions("ACTIVE");
-        const match = mine.find((s) => s.plateNumber === plate);
-        if (!cancelled && match) {
-          setSession({
-            id: match.id,
-            code: match.code,
-            zoneId: match.zone.id,
-            plateNumber: match.plateNumber,
-            status: match.status,
-            startAt: match.startAt,
-            endAt: match.endAt,
-            durationMinutes: match.durationMinutes,
-            payableAmount: match.payableAmount,
-            taxAmount: 0,
-            penaltyAmount: 0,
-            zone: match.zone,
-          });
-          setLoading(false);
-          return;
-        }
-        if (!cancelled && !match) {
-          setLoading(false);
-          return;
-        }
-      } catch (cause) {
-        if (!gapOf(cause)) {
-          if (!cancelled) {
-            setError(
-              cause instanceof ApiError
-                ? cause.message
-                : "Could not check whether your car is parked.",
-            );
-            setLoading(false);
-          }
-          return;
-        }
-        // Fall through to the attendant-era lookup below.
-      }
-
-      try {
-        const found = await api.sessions.lookup(plate);
-        if (!cancelled) setSession(found.active);
-      } catch (cause) {
-        if (cancelled) return;
-        if (gapOf(cause)) {
-          setLookupGap(
-            `${MISSING.mySessions!.because}\n\nThe lookup that would answer this today, ${MISSING.plateLookup!.route}, is staff-only: it returns any vehicle's session to whoever asks, which is exactly why a citizen must not be handed it as it stands.\n\nNeeds: ${MISSING.mySessions!.route}`,
-          );
-        } else {
-          setError(
-            cause instanceof ApiError
-              ? cause.message
-              : "Could not check whether your car is parked.",
-          );
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+      await fetchSession();
+      if (!cancelled) setLoading(false);
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [plate, user]);
+  }, [plate, user, fetchSession]);
+
+  const refreshWallet = React.useCallback(async () => {
+    try {
+      setWallet(await api.wallet.balance());
+    } catch {
+      // Left null. There is no wallet on the server at all, so the pay
+      // button says so rather than offering to spend a balance nobody holds.
+    }
+  }, []);
 
   React.useEffect(() => {
     if (!user) return;
-    let cancelled = false;
-    void api.wallet
-      .balance()
-      .then((found) => {
-        if (!cancelled) setWallet(found);
-      })
-      .catch(() => {
-        // Left null. There is no wallet on the server at all, so the pay
-        // button says so rather than offering to spend a balance nobody holds.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [user]);
+    void refreshWallet();
+  }, [user, refreshWallet]);
 
   if (loading) return <Loading label="Looking for your car" />;
 
@@ -285,23 +285,9 @@ export default function Parked() {
                   ? "Pay from wallet"
                   : `Pay ${formatMoney(owed)} from wallet`
               }
-              busy={paying}
-              onPress={() => {
-                setPaying(true);
-                void api.wallet
-                  .paySession(session.id)
-                  .then(() => router.replace("/(tabs)/history"))
-                  .catch((cause: unknown) => {
-                    setPaying(false);
-                    setPayNote(
-                      gapOf(cause)
-                        ? `${MISSING.wallet!.because}\n\nNeeds: ${MISSING.wallet!.route}`
-                        : cause instanceof ApiError
-                          ? cause.message
-                          : "That payment did not go through.",
-                    );
-                  });
-              }}
+              busy={payingWallet}
+              disabled={payingGateway}
+              onPress={() => void payFromWallet(session.id)}
             />
 
             <Sub style={styles.balance}>
@@ -318,24 +304,16 @@ export default function Parked() {
               label="Pay by UPI instead"
               variant="ghost"
               size="medium"
-              onPress={() => {
-                void api.payments
-                  .payOwnSession(session.id)
-                  .then(() => router.replace("/(tabs)/history"))
-                  .catch((cause: unknown) => {
-                    setPayNote(
-                      gapOf(cause)
-                        ? `${MISSING.payment!.because}\n\nNeeds a citizen-scoped variant of ${MISSING.payment!.route}.`
-                        : cause instanceof ApiError
-                          ? cause.message
-                          : "That payment could not be started.",
-                    );
-                  });
-              }}
+              busy={payingGateway}
+              disabled={payingWallet}
+              onPress={() => void payByGateway(session.id)}
             />
 
-            {payNote ? <Unavailable title="That payment could not be made" body={payNote} /> : null}
+            {paySuccess ? <Banner tone="good" title={paySuccess} /> : null}
+            {payNote ? <Banner tone="crit" title="That payment did not go through" body={payNote} /> : null}
           </View>
+
+          {modal}
 
           <Sub style={styles.disclaimer}>
             Whatever you pay, the amount is the server's. Nothing on this phone decides what parking
@@ -345,6 +323,75 @@ export default function Parked() {
       ) : null}
     </Screen>
   );
+
+  /** Pays for `sessionId` straight out of the wallet balance. Captures immediately, no checkout. */
+  async function payFromWallet(sessionId: string): Promise<void> {
+    setPayNote(null);
+    setPaySuccess(null);
+    setPayingWallet(true);
+    try {
+      await api.wallet.paySession(sessionId);
+      await Promise.all([fetchSession(), refreshWallet()]);
+      setPaySuccess("Paid from your wallet.");
+    } catch (cause) {
+      setPayNote(
+        gapOf(cause)
+          ? `${MISSING.wallet!.because}\n\nNeeds: ${MISSING.wallet!.route}`
+          : cause instanceof ApiError
+            ? cause.message
+            : "That payment did not go through.",
+      );
+    } finally {
+      setPayingWallet(false);
+    }
+  }
+
+  /** Pays for `sessionId` through the gateway checkout sheet, then confirms it server-side. */
+  async function payByGateway(sessionId: string): Promise<void> {
+    setPayNote(null);
+    setPaySuccess(null);
+    setPayingGateway(true);
+    try {
+      const payment = await api.payments.payOwnSession(sessionId);
+
+      if (payment.gatewayKeyId && payment.gatewayOrder) {
+        const result = await open({
+          gatewayKeyId: payment.gatewayKeyId,
+          gatewayOrder: payment.gatewayOrder,
+          description: `Parking — ${formatMoney(payment.amount)}`,
+        });
+
+        if (result.status === "cancelled") {
+          setPayingGateway(false);
+          return;
+        }
+        if (result.status === "error") {
+          setPayNote(result.message);
+          setPayingGateway(false);
+          return;
+        }
+
+        await api.payments.verify(payment.id, {
+          razorpayOrderId: result.razorpayOrderId,
+          razorpayPaymentId: result.razorpayPaymentId,
+          razorpaySignature: result.razorpaySignature,
+        });
+      }
+
+      await fetchSession();
+      setPaySuccess("Payment received.");
+    } catch (cause) {
+      setPayNote(
+        gapOf(cause)
+          ? `${MISSING.payment!.because}\n\nNeeds a citizen-scoped variant of ${MISSING.payment!.route}.`
+          : cause instanceof ApiError
+            ? cause.message
+            : "That payment could not be started.",
+      );
+    } finally {
+      setPayingGateway(false);
+    }
+  }
 }
 
 const styles = StyleSheet.create({
