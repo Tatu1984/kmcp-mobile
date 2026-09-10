@@ -11,9 +11,12 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
-    "citizen": "npm run start --workspace @kmcp/citizen"
+    "dev": "npm run start --workspace @kmcp/citizen"
   },
   "engines": {
     "node": ">=22"
+  },
+  "overrides": {
+    "react": "19.2.3"
   }
 }

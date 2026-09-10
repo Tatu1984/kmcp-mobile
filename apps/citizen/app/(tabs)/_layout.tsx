@@ -1,5 +1,5 @@
 import { Tabs } from "expo-router";
-import { Text } from "react-native";
+import { Text, type ColorValue } from "react-native";
 
 import { theme } from "../../lib/theme";
 
@@ -60,6 +60,6 @@ export default function TabsLayout() {
 }
 
 /** Glyphs rather than an icon package — three tabs do not justify the dependency. */
-function TabGlyph({ glyph, color }: { glyph: string; color: string }) {
+function TabGlyph({ glyph, color }: { glyph: string; color: ColorValue }) {
   return <Text style={{ color, fontSize: 21, lineHeight: 26 }}>{glyph}</Text>;
 }

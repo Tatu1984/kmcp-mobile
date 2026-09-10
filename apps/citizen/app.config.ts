@@ -24,7 +24,6 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     // Light, deliberately, and not a preference: the whole app is built around
     // a map, and a map on a dark ground is unreadable in daylight.
     userInterfaceStyle: "light",
-    newArchEnabled: true,
     assetBundlePatterns: ["**/*"],
     ios: {
       supportsTablet: false,
@@ -41,6 +40,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     plugins: [
       "expo-router",
       "expo-secure-store",
+      "expo-status-bar",
       [
         "expo-location",
         {

@@ -156,7 +156,7 @@ export function ParkMap({
 
 const styles = StyleSheet.create({
   noMap: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: theme.colour.mapGround,
     alignItems: "center",
     justifyContent: "center",
